@@ -8,7 +8,8 @@ chrome.action.onClicked.addListener((tab) => {
   
   chrome.runtime.onMessage.addListener((msg, sender, respond) => {
     if (msg.type === 'capture') {
-      captureAndProcess(msg.rect, msg.isDark, sender.tab.id).then(finalUrl => {
+      captureAndProcess(msg.rect, sender.tab.id).then(finalUrl => {
+        chrome.tabs.sendMessage(sender.tab.id, { type: 'captured' });
         chrome.downloads.download({
           url: finalUrl,
           filename: 'aesthetic-screenshot.png',
@@ -19,44 +20,8 @@ chrome.action.onClicked.addListener((tab) => {
     }
   });
   
-  async function emulateLightMode(tabId) {
-    await new Promise((resolve, reject) => {
-      chrome.debugger.attach({tabId: tabId}, '1.3', () => {
-        if (chrome.runtime.lastError) {
-          reject(chrome.runtime.lastError);
-        } else {
-          resolve();
-        }
-      });
-    });
-  
-    await new Promise((resolve, reject) => {
-      chrome.debugger.sendCommand({tabId: tabId}, 'Emulation.setEmulatedMedia', {
-        features: [{ name: 'prefers-color-scheme', value: 'light' }]
-      }, () => {
-        if (chrome.runtime.lastError) {
-          reject(chrome.runtime.lastError);
-        } else {
-          resolve();
-        }
-      });
-    });
-  }
-  
-  async function captureAndProcess(rect, isDark, tabId) {
-    if (isDark) {
-      await emulateLightMode(tabId);
-    }
-  
+  async function captureAndProcess(rect, tabId) {
     const dataUrl = await chrome.tabs.captureVisibleTab(null, { format: 'png' });
-  
-    if (isDark) {
-      chrome.debugger.detach({tabId: tabId}, () => {
-        if (chrome.runtime.lastError) {
-          console.error('Detach error:', chrome.runtime.lastError);
-        }
-      });
-    }
   
     const response = await fetch(dataUrl);
     const blob = await response.blob();

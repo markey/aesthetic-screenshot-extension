@@ -3,6 +3,7 @@
     let selectionDiv = null;
     let startX, startY;
     let isSelecting = false;
+    let invertStyle = null;
   
     const overlay = document.createElement('div');
     overlay.style.position = 'fixed';
@@ -73,9 +74,33 @@
                      document.documentElement.classList.contains('dark') ||
                      isDarkBg;
   
-      chrome.runtime.sendMessage({ type: 'capture', rect, isDark });
+      if (isDark) {
+        invertStyle = document.createElement('style');
+        invertStyle.textContent = `
+          html {
+            filter: invert(1) hue-rotate(180deg) !important;
+          }
+          img, video, [style*="background-image"], canvas, svg, iframe {
+            filter: invert(1) hue-rotate(180deg) !important;
+          }
+        `;
+        document.head.appendChild(invertStyle);
+        // Add delay to allow the browser to repaint after style application
+        setTimeout(() => {
+          chrome.runtime.sendMessage({ type: 'capture', rect });
+        }, 100);
+      } else {
+        chrome.runtime.sendMessage({ type: 'capture', rect });
+      }
   
       cancel();
+    });
+  
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg.type === 'captured' && invertStyle) {
+        invertStyle.remove();
+        invertStyle = null;
+      }
     });
   
     function setPosition(x, y, w, h) {
