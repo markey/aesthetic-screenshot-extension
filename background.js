@@ -34,7 +34,7 @@ chrome.action.onClicked.addListener((tab) => {
     const screenshotImg = cropCanvas.transferToImageBitmap();
   
     const innerPadding = 40;
-    const outerPadding = 30; // Adjusted to ~0.7cm at standard DPI
+    const outerPadding = 45; // Adjusted to ~1.2cm at standard DPI
     const borderRadius = 8;
     const maxInnerWidth = 1000 - innerPadding * 2;
     const scale = Math.min(1, maxInnerWidth / rect.width);
@@ -80,6 +80,13 @@ chrome.action.onClicked.addListener((tab) => {
     // Draw screenshot inside document with high quality smoothing
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(screenshotImg, docX + innerPadding, docY + innerPadding, innerWidth, innerHeight);
+  
+    // Add watermark text
+    ctx.font = '12px sans-serif';
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+    ctx.textAlign = 'right';
+    ctx.shadowColor = 'transparent'; // Disable shadow for text
+    ctx.fillText('@mark_k (Mark Kretschmann)', docX + docWidth, docY + docHeight + 20);
   
     const finalBlob = await canvas.convertToBlob({ type: 'image/png' });
   
