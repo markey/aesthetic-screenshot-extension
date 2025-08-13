@@ -1,0 +1,11 @@
+{
+    "manifest_version": 3,
+    "name": "Aesthetic Screenshot",
+    "version": "1.0",
+    "description": "Captures a freely selectable area of the webpage and applies an aesthetic style. Adjusts for dark mode to ensure light mode output.",
+    "permissions": ["activeTab", "scripting", "tabs", "downloads"],
+    "action": {},
+    "background": {
+      "service_worker": "background.js"
+    }
+  }
