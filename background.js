@@ -23,11 +23,16 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (msg.type === 'capture') {
     captureAndProcess(msg.rect, sender.tab.id).then(finalUrl => {
       chrome.tabs.sendMessage(sender.tab.id, { type: 'captured' });
+      
+      // Download the screenshot
       chrome.downloads.download({
         url: finalUrl,
         filename: 'aesthetic-screenshot.png',
         saveAs: true
       });
+      
+      // Also copy to clipboard
+      copyToClipboard(finalUrl);
     }).catch(e => console.error('Error in capture process:', e));
     return true; // Allow async response
   }
@@ -185,4 +190,116 @@ function openSettings() {
   chrome.tabs.create({
     url: chrome.runtime.getURL('popup.html')
   });
+}
+
+// Copy screenshot to clipboard
+async function copyToClipboard(dataUrl) {
+  try {
+    // Convert data URL to blob
+    const response = await fetch(dataUrl);
+    const blob = await response.blob();
+    
+    // Create clipboard item
+    const clipboardItem = new ClipboardItem({
+      [blob.type]: blob
+    });
+    
+    // Copy to clipboard
+    await navigator.clipboard.write([clipboardItem]);
+    
+    // Show success notification
+    showNotification('Screenshot copied to clipboard!', 'success');
+  } catch (error) {
+    console.error('Failed to copy to clipboard:', error);
+    
+    // Fallback: try to copy as image data
+    try {
+      await copyImageDataToClipboard(dataUrl);
+    } catch (fallbackError) {
+      console.error('Fallback clipboard copy also failed:', fallbackError);
+      showNotification('Failed to copy to clipboard', 'error');
+    }
+  }
+}
+
+// Fallback method for copying image data to clipboard
+async function copyImageDataToClipboard(dataUrl) {
+  try {
+    // Create a canvas element to manipulate the image
+    const canvas = new OffscreenCanvas(1, 1);
+    const ctx = canvas.getContext('2d');
+    
+    // Load the image
+    const response = await fetch(dataUrl);
+    const blob = await response.blob();
+    const imageBitmap = await createImageBitmap(blob);
+    
+    // Set canvas size to match image
+    canvas.width = imageBitmap.width;
+    canvas.height = imageBitmap.height;
+    
+    // Draw image to canvas
+    ctx.drawImage(imageBitmap, 0, 0);
+    
+    // Convert to blob
+    const canvasBlob = await canvas.convertToBlob({ type: 'image/png' });
+    
+    // Try to copy using the modern clipboard API
+    const clipboardItem = new ClipboardItem({
+      [canvasBlob.type]: canvasBlob
+    });
+    
+    await navigator.clipboard.write([clipboardItem]);
+    showNotification('Screenshot copied to clipboard!', 'success');
+  } catch (error) {
+    throw error;
+  }
+}
+
+// Show notification to user
+function showNotification(message, type = 'info') {
+  // Create a simple notification element
+  const notification = document.createElement('div');
+  notification.style.cssText = `
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    padding: 12px 20px;
+    border-radius: 8px;
+    color: white;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+    z-index: 2147483647;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    transform: translateX(100%);
+    transition: transform 0.3s ease;
+  `;
+  
+  // Set background color based on type
+  if (type === 'success') {
+    notification.style.background = '#10b981'; // Green
+  } else if (type === 'error') {
+    notification.style.background = '#ef4444'; // Red
+  } else {
+    notification.style.background = '#3b82f6'; // Blue
+  }
+  
+  notification.textContent = message;
+  document.body.appendChild(notification);
+  
+  // Animate in
+  setTimeout(() => {
+    notification.style.transform = 'translateX(0)';
+  }, 100);
+  
+  // Auto-remove after 3 seconds
+  setTimeout(() => {
+    notification.style.transform = 'translateX(100%)';
+    setTimeout(() => {
+      if (notification.parentNode) {
+        notification.parentNode.removeChild(notification);
+      }
+    }, 300);
+  }, 3000);
 }

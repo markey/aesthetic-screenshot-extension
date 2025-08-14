@@ -9,6 +9,7 @@ A Chrome extension that captures freely selectable areas of webpages and applies
 - **Dark Mode Support**: Automatically detects and adjusts for dark mode pages
 - **Customizable Watermarks**: Configure your own watermark text through the settings popup
 - **High Quality**: Maintains original screenshot quality with professional styling
+- **Clipboard Integration**: Automatically copies screenshots to clipboard for easy pasting
 
 ## Installation
 
@@ -25,7 +26,7 @@ A Chrome extension that captures freely selectable areas of webpages and applies
 1. **Click the extension icon** in your toolbar to open the settings popup
 2. **Click "Take Screenshot"** to start area selection
 3. **Click and drag** to select the area you want to capture
-4. The screenshot will be automatically processed and downloaded
+4. The screenshot will be automatically processed, copied to clipboard, and downloaded
 5. Press `Esc` to cancel at any time
 
 ### Configuring Watermarks
