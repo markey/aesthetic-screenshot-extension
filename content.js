@@ -12,33 +12,26 @@
     overlay.style.width = '100%';
     overlay.style.height = '100%';
     overlay.style.background = 'transparent';
-    overlay.style.zIndex = '999999';
+    overlay.style.zIndex = '2147483647';
     overlay.style.cursor = 'crosshair';
     document.body.appendChild(overlay);
   
-    overlay.addEventListener('mousedown', (e) => {
-      isSelecting = true;
-      startX = e.clientX;
-      startY = e.clientY;
+    const escListener = (e) => {
+      if (e.key === 'Escape') {
+        cancel();
+      }
+    };
+    document.addEventListener('keydown', escListener);
   
-      selectionDiv = document.createElement('div');
-      selectionDiv.style.position = 'fixed';
-      selectionDiv.style.border = '2px dashed #000';
-      selectionDiv.style.background = 'rgba(0, 0, 255, 0.1)';
-      selectionDiv.style.zIndex = '1000000';
-      document.body.appendChild(selectionDiv);
-  
-      setPosition(startX, startY, 0, 0);
-    });
-  
-    overlay.addEventListener('mousemove', (e) => {
+    const onMouseMove = (e) => {
       if (!isSelecting) return;
       const width = e.clientX - startX;
       const height = e.clientY - startY;
       setPosition(startX, startY, width, height);
-    });
+    };
   
-    overlay.addEventListener('mouseup', (e) => {
+    const onMouseUp = (e) => {
+      document.removeEventListener('mousemove', onMouseMove);
       if (!isSelecting) return;
       isSelecting = false;
   
@@ -94,6 +87,24 @@
       }
   
       cancel();
+    };
+  
+    overlay.addEventListener('mousedown', (e) => {
+      isSelecting = true;
+      startX = e.clientX;
+      startY = e.clientY;
+  
+      selectionDiv = document.createElement('div');
+      selectionDiv.style.position = 'fixed';
+      selectionDiv.style.border = '2px dashed #000';
+      selectionDiv.style.background = 'rgba(0, 0, 255, 0.1)';
+      selectionDiv.style.zIndex = '2147483647';
+      document.body.appendChild(selectionDiv);
+  
+      setPosition(startX, startY, 0, 0);
+  
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp, { once: true });
     });
   
     chrome.runtime.onMessage.addListener((msg) => {
@@ -121,5 +132,8 @@
     function cancel() {
       if (selectionDiv) selectionDiv.remove();
       overlay.remove();
+      document.removeEventListener('keydown', escListener);
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
     }
   })();
