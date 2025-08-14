@@ -36,10 +36,8 @@ chrome.action.onClicked.addListener((tab) => {
     const innerPadding = 40;
     const outerPadding = 45; // Adjusted to ~1.2cm at standard DPI
     const borderRadius = 8;
-    const maxInnerWidth = 1000 - innerPadding * 2;
-    const scale = Math.min(1, maxInnerWidth / rect.width);
-    const innerWidth = rect.width * scale;
-    const innerHeight = rect.height * scale;
+    const innerWidth = rect.width;
+    const innerHeight = rect.height;
     const docWidth = innerWidth + innerPadding * 2;
     const docHeight = innerHeight + innerPadding * 2;
     const canvasWidth = docWidth + outerPadding * 2;
@@ -77,8 +75,7 @@ chrome.action.onClicked.addListener((tab) => {
     ctx.fillStyle = 'white';
     ctx.fill();
   
-    // Draw screenshot inside document with high quality smoothing
-    ctx.imageSmoothingQuality = 'high';
+    // Draw screenshot inside document without scaling
     ctx.drawImage(screenshotImg, docX + innerPadding, docY + innerPadding, innerWidth, innerHeight);
   
     // Add watermark text
