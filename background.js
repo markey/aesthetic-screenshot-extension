@@ -75,7 +75,15 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     const canvasHeight = docHeight + outerPadding * 2;
   
     const canvas = new OffscreenCanvas(canvasWidth, canvasHeight);
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { alpha: true, willReadFrequently: false });
+    
+    // Enable crisp text rendering
+    ctx.imageSmoothingEnabled = false;
+    ctx.textRenderingOptimization = 'optimizeSpeed';
+    
+    // Ensure crisp rendering by using integer coordinates and disabling smoothing
+    ctx.imageSmoothingEnabled = false;
+    ctx.imageSmoothingQuality = 'high';
   
     // Gradient background
     const gradient = ctx.createLinearGradient(0, 0, canvasWidth, canvasHeight);
@@ -89,8 +97,8 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     ctx.shadowBlur = 30;
     ctx.shadowOffsetX = 0;
     ctx.shadowOffsetY = 10;
-    const docX = outerPadding;
-    const docY = outerPadding;
+    const docX = Math.round(outerPadding);
+    const docY = Math.round(outerPadding);
     ctx.beginPath();
     ctx.roundRect(docX, docY, docWidth, docHeight, borderRadius);
     ctx.fillStyle = 'white';
@@ -107,19 +115,31 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     ctx.fill();
   
     // Draw screenshot inside document without scaling
-    ctx.drawImage(screenshotImg, docX + innerPadding, docY + innerPadding, innerWidth, innerHeight);
+    const screenshotX = Math.round(docX + innerPadding);
+    const screenshotY = Math.round(docY + innerPadding);
+    ctx.drawImage(screenshotImg, screenshotX, screenshotY, innerWidth, innerHeight);
   
     // Add watermark text
     const watermarkText = await getWatermarkText();
     if (watermarkText) {
-      ctx.font = '12px sans-serif';
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+      // Use a larger, crisper font with better rendering
+      ctx.font = 'bold 14px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'; // Slightly more opaque for better readability
       ctx.textAlign = 'right';
       ctx.shadowColor = 'transparent'; // Disable shadow for text
-      ctx.fillText(watermarkText, docX + docWidth, docY + docHeight + 20);
+      
+      // Ensure text is drawn on pixel boundaries for crispness
+      const textX = Math.round(docX + docWidth);
+      const textY = Math.round(docY + docHeight + 20);
+      
+      // Draw text with crisp rendering
+      ctx.fillText(watermarkText, textX, textY);
     }
   
-    const finalBlob = await canvas.convertToBlob({ type: 'image/png' });
+    const finalBlob = await canvas.convertToBlob({ 
+      type: 'image/png',
+      quality: 1.0 // Maximum quality
+    });
   
     const finalUrl = await new Promise((resolve, reject) => {
       const reader = new FileReader();
