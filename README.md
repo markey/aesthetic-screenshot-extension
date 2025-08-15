@@ -46,7 +46,6 @@ A Chrome extension that captures freely selectable areas of webpages and applies
 
 - **Custom Text**: Enter any text you want (e.g., "@username", "Company Name", "© 2024")
 - **No Watermark**: Leave the field empty to disable watermarks entirely
-- **Default**: Use the built-in default watermark
 
 ### Quick Access
 

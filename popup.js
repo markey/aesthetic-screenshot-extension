@@ -8,7 +8,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const saveBtn = document.getElementById('saveBtn');
     const screenshotBtn = document.getElementById('screenshotBtn');
 
-    const DEFAULT_WATERMARK = '@mark_k (Mark Kretschmann)';
+    // No built-in default watermark
 
     // Load saved settings when popup opens
     loadSettings();
@@ -29,9 +29,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Handle reset button
     resetBtn.addEventListener('click', function() {
-        watermarkInput.value = DEFAULT_WATERMARK;
+        watermarkInput.value = '';
         updatePreview();
-        showStatus('Settings reset to default', 'success');
+        showStatus('Watermark cleared', 'success');
     });
     
     // Handle screenshot button
@@ -48,8 +48,8 @@ document.addEventListener('DOMContentLoaded', function() {
             if (result.watermarkText !== undefined) {
                 watermarkInput.value = result.watermarkText;
             } else {
-                // Set default value if no setting exists
-                watermarkInput.value = DEFAULT_WATERMARK;
+                // No default: start empty
+                watermarkInput.value = '';
             }
             updatePreview();
         });
