@@ -220,12 +220,16 @@
       document.addEventListener('mouseup', onMouseUp, { once: true });
     });
   
-    chrome.runtime.onMessage.addListener((msg) => {
-      if (msg.type === 'captured' && invertStyle) {
-        invertStyle.remove();
-        invertStyle = null;
-      }
-    });
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type === 'captured' && invertStyle) {
+      invertStyle.remove();
+      invertStyle = null;
+    }
+    // Request from background to copy the produced image to clipboard
+    if (msg.type === 'copyToClipboard' && msg.dataUrl) {
+      copyImageDataUrlToClipboard(msg.dataUrl);
+    }
+  });
   
     function setPosition(x, y, w, h) {
       if (w < 0) {
@@ -242,7 +246,7 @@
       selectionDiv.style.height = `${h}px`;
     }
   
-    function cancel() {
+  function cancel() {
       if (selectionDiv) selectionDiv.remove();
       overlay.remove();
       document.removeEventListener('keydown', escListener);
@@ -254,5 +258,46 @@
         colorSchemeObserver.disconnect();
         colorSchemeObserver = null;
       }
+  }
+
+  // Copy a data URL image to clipboard from the page context
+  async function copyImageDataUrlToClipboard(dataUrl) {
+    try {
+      const response = await fetch(dataUrl);
+      const blob = await response.blob();
+      const item = new ClipboardItem({ [blob.type]: blob });
+      await navigator.clipboard.write([item]);
+      showToast('Screenshot copied to clipboard');
+    } catch (err) {
+      // Best-effort message; some sites may restrict clipboard API
+      showToast('Failed to copy to clipboard');
+      console.error('Clipboard write failed:', err);
     }
-  })();
+  }
+
+  // Lightweight toast notification within the page
+  function showToast(message) {
+    try {
+      const toast = document.createElement('div');
+      toast.textContent = message;
+      toast.style.cssText = `
+        position: fixed; top: 20px; right: 20px; z-index: 2147483647;
+        padding: 10px 14px; background: #111827; color: #fff; border-radius: 8px;
+        font: 500 13px -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+        box-shadow: 0 6px 16px rgba(0,0,0,0.2); opacity: 0; transform: translateY(-8px);
+        transition: opacity .18s ease, transform .18s ease;`;
+      document.documentElement.appendChild(toast);
+      requestAnimationFrame(() => {
+        toast.style.opacity = '1';
+        toast.style.transform = 'translateY(0)';
+      });
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(-8px)';
+        setTimeout(() => toast.remove(), 200);
+      }, 2200);
+    } catch (_) {
+      // Ignore if DOM is unavailable
+    }
+  }
+})();

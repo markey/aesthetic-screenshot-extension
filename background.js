@@ -23,16 +23,24 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (msg.type === 'capture') {
     captureAndProcess(msg.rect, sender.tab.id).then(finalUrl => {
       chrome.tabs.sendMessage(sender.tab.id, { type: 'captured' });
-      
-      // Download the screenshot
+
+      // Always request the page to copy the image to the clipboard
+      chrome.tabs.sendMessage(sender.tab.id, { type: 'copyToClipboard', dataUrl: finalUrl });
+
+      // Attempt to download the screenshot. If the user cancels the Save As
+      // dialog, fall back to copying the image to the clipboard.
       chrome.downloads.download({
         url: finalUrl,
         filename: 'aesthetic-screenshot.png',
         saveAs: true
+      }, (downloadId) => {
+        const err = chrome.runtime.lastError;
+        if (err || typeof downloadId !== 'number') {
+          // Save dialog was likely aborted or download failed — copy was already attempted
+          // above, but leave this in case the first message was missed.
+          chrome.tabs.sendMessage(sender.tab.id, { type: 'copyToClipboard', dataUrl: finalUrl });
+        }
       });
-      
-      // Also copy to clipboard
-      copyToClipboard(finalUrl);
     }).catch(e => console.error('Error in capture process:', e));
     return true; // Allow async response
   }
