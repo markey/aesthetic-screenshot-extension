@@ -90,11 +90,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     const canvas = new OffscreenCanvas(canvasWidth, canvasHeight);
     const ctx = canvas.getContext('2d', { alpha: true, willReadFrequently: false });
     
-    // Enable crisp text rendering
-    ctx.imageSmoothingEnabled = false;
-    ctx.textRenderingOptimization = 'optimizeSpeed';
-    
-    // Ensure crisp rendering by using integer coordinates and disabling smoothing
+    // Disable smoothing for images; text will render crisply on integer coords
     ctx.imageSmoothingEnabled = false;
     ctx.imageSmoothingQuality = 'high';
   
@@ -132,20 +128,22 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     const screenshotY = Math.round(docY + innerPadding);
     ctx.drawImage(screenshotImg, screenshotX, screenshotY, innerWidth, innerHeight);
   
-    // Add watermark text
+    // Add watermark text (rendered in the gradient area below the document)
     const watermarkText = await getWatermarkText();
     if (watermarkText) {
-      // Use a larger, crisper font with better rendering
-      ctx.font = 'bold 14px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'; // Slightly more opaque for better readability
+      // Larger, bold font for readability; integer-aligned for crisp edges
+      ctx.font = 'bold 18px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
       ctx.textAlign = 'right';
-      ctx.shadowColor = 'transparent'; // Disable shadow for text
-      
-      // Ensure text is drawn on pixel boundaries for crispness
+      ctx.textBaseline = 'alphabetic';
+      ctx.shadowColor = 'transparent';
+
+      // Draw an outer light stroke for separation on the gradient, then dark fill
       const textX = Math.round(docX + docWidth);
       const textY = Math.round(docY + docHeight + 20);
-      
-      // Draw text with crisp rendering
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+      ctx.strokeText(watermarkText, textX, textY);
+      ctx.fillStyle = '#111827';
       ctx.fillText(watermarkText, textX, textY);
     }
   
