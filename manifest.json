@@ -3,7 +3,7 @@
     "name": "Aesthetic Screenshot",
     "version": "1.2",
     "description": "Captures a freely selectable area of the webpage and applies an aesthetic style. Adjusts for dark mode to ensure light mode output.",
-  "permissions": ["activeTab", "scripting", "tabs", "downloads", "storage", "contextMenus", "clipboardWrite"],
+  "permissions": ["debugger", "activeTab", "scripting", "tabs", "downloads", "storage", "contextMenus", "clipboardWrite"],
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
