@@ -64,13 +64,37 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   }
 });
   
-  async function captureAndProcess(rect, tabId) {
-    // Capture the selected region crisply at device pixels via CDP
-    const crispDataUrl = await captureCrisp(tabId, rect);
+  async function captureAndProcess(rectCss, tabId) {
+    // Capture the full compositor output at device pixels, crop locally
+    const { dataUrl: fullDataUrl, vpCSS } = await captureCrisp(tabId);
 
-    const response = await fetch(crispDataUrl);
+    const response = await fetch(fullDataUrl);
     const blob = await response.blob();
-    const screenshotImg = await createImageBitmap(blob);
+    let screenshotImg = await createImageBitmap(blob);
+
+    // If a region was selected (in CSS px), crop precisely using the actual scale
+    if (rectCss) {
+      const scaleX = vpCSS?.w ? screenshotImg.width / vpCSS.w : 1;
+      const scaleY = vpCSS?.h ? screenshotImg.height / vpCSS.h : 1;
+
+      const left = Math.floor((rectCss.x) * scaleX);
+      const top = Math.floor((rectCss.y) * scaleY);
+      const right = Math.ceil((rectCss.x + rectCss.width) * scaleX);
+      const bottom = Math.ceil((rectCss.y + rectCss.height) * scaleY);
+
+      const sx = Math.max(0, Math.min(left, screenshotImg.width - 1));
+      const sy = Math.max(0, Math.min(top, screenshotImg.height - 1));
+      const sw = Math.max(1, Math.min(right - left, screenshotImg.width - sx));
+      const sh = Math.max(1, Math.min(bottom - top, screenshotImg.height - sy));
+
+      const cropCanvas = new OffscreenCanvas(sw, sh);
+      const cropCtx = cropCanvas.getContext('2d', { alpha: true });
+      cropCtx.imageSmoothingEnabled = false;
+      cropCtx.drawImage(screenshotImg, sx, sy, sw, sh, 0, 0, sw, sh);
+      // Replace screenshotImg with cropped version for downstream composition
+      const cropBlob = await cropCanvas.convertToBlob({ type: 'image/png' });
+      screenshotImg = await createImageBitmap(cropBlob);
+    }
   
     const innerPadding = 40;
     const outerPadding = 45; // Adjusted to ~1.2cm at standard DPI
@@ -163,18 +187,8 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 // - Forces zoom to 1.0 during capture
 // - Uses actual devicePixelRatio as the capture scale
 // - Aligns clip to device pixels to avoid filtering
-async function captureCrisp(tabId, regionDeviceRect = null) {
-  // 1) Read DPR before zoom change to recover CSS rect correctly
-  const [{ result: dprBefore = 1 }] = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: () => window.devicePixelRatio
-  });
-
-  // 2) Freeze zoom at 1.0, remember old zoom
-  const oldZoom = await chrome.tabs.getZoom(tabId).catch(() => 1);
-  await chrome.tabs.setZoom(tabId, 1.0).catch(() => {});
-
-  // 3) Read DPR and viewport in the page context (after zoom normalization)
+async function captureCrisp(tabId) {
+  // Measure DPR and viewport at the user's current zoom to preserve layout
   const [{ result: dpr = 1 }] = await chrome.scripting.executeScript({
     target: { tabId },
     func: () => window.devicePixelRatio
@@ -188,42 +202,27 @@ async function captureCrisp(tabId, regionDeviceRect = null) {
   await chrome.debugger.attach(target, '1.3');
 
   try {
-    // 3) Make device metrics explicit to CDP, match current viewport, scale by DPR
-    await chrome.debugger.sendCommand(target, 'Emulation.setDeviceMetricsOverride', {
-      width: Math.floor(vp.w),
-      height: Math.floor(vp.h),
-      deviceScaleFactor: dpr,
-      mobile: false
-    });
-
     // Avoid transparent background that can change AA behavior
     await chrome.debugger.sendCommand(target, 'Emulation.setDefaultBackgroundColorOverride', {
       color: { r: 255, g: 255, b: 255, a: 1 }
     }).catch(() => {});
 
-    // 4) Build a clip aligned to device pixels, or omit to capture the whole viewport
-    // Convert device-rect (based on pre-zoom DPR) to a proper CSS clip, then snap
-    const clip = regionDeviceRect ? makeClipFromDeviceRect(regionDeviceRect, dprBefore, dpr) : undefined;
-
     // Ensure Page domain is ready
     await chrome.debugger.sendCommand(target, 'Page.enable').catch(() => {});
 
-    // 5) Capture at device pixels, no resample
+    // Capture compositor output as-is (no zoom change, no metric override)
     const { data } = await chrome.debugger.sendCommand(target, 'Page.captureScreenshot', {
       format: 'png',
       fromSurface: true,
-      captureBeyondViewport: true,
-      clip
+      // Capture only the visible viewport so bitmap size matches window.inner*.
+      captureBeyondViewport: false,
+      // No clip: capture full viewport, we will crop precisely client-side
     });
 
-    // 6) Return PNG as data URL (no intermediate canvas)
-    return 'data:image/png;base64,' + data;
+    return { dataUrl: 'data:image/png;base64,' + data, vpCSS: vp, dpr };
   } finally {
-    // 7) Cleanup and restore user state
-    await chrome.debugger.sendCommand(target, 'Emulation.clearDeviceMetricsOverride').catch(() => {});
     await chrome.debugger.sendCommand(target, 'Emulation.setDefaultBackgroundColorOverride').catch(() => {});
     await chrome.debugger.detach(target).catch(() => {});
-    await chrome.tabs.setZoom(tabId, oldZoom).catch(() => {});
   }
 }
 
@@ -231,20 +230,32 @@ async function captureCrisp(tabId, regionDeviceRect = null) {
 // by snapping to the device pixel grid using the current DPR.
 function makeClipFromDeviceRect(deviceRect, dprAtSelection, dprAtCapture) {
   // Convert the device-rect (measured with dprAtSelection) back to CSS px
+  const dprSel = dprAtSelection || 1;
   const cssRect = {
-    x: deviceRect.x / dprAtSelection,
-    y: deviceRect.y / dprAtSelection,
-    width: deviceRect.width / dprAtSelection,
-    height: deviceRect.height / dprAtSelection
+    x: deviceRect.x / dprSel,
+    y: deviceRect.y / dprSel,
+    width: deviceRect.width / dprSel,
+    height: deviceRect.height / dprSel
   };
-  // Snap CSS values to device pixel grid
-  const dpr = dprAtCapture || dprAtSelection || 1;
-  const snapCss = v => Math.round(v * dpr) / dpr;
-  const x = snapCss(cssRect.x);
-  const y = snapCss(cssRect.y);
-  const w = snapCss(cssRect.width);
-  const h = snapCss(cssRect.height);
-  return { x, y, width: w, height: h, scale: dpr };
+
+  // Snap by aligning left/top to floor and right/bottom to ceil in device pixels,
+  // then convert back to CSS. This preserves the intended right/bottom edges and
+  // avoids +/-1px due to independent rounding of width.
+  const dpr = dprAtCapture || dprSel || 1;
+  const leftDev = Math.floor(cssRect.x * dpr);
+  const topDev = Math.floor(cssRect.y * dpr);
+  const rightDev = Math.ceil((cssRect.x + cssRect.width) * dpr);
+  const bottomDev = Math.ceil((cssRect.y + cssRect.height) * dpr);
+
+  const x = leftDev / dpr;
+  const y = topDev / dpr;
+  const w = Math.max(1, rightDev - leftDev) / dpr;
+  const h = Math.max(1, bottomDev - topDev) / dpr;
+
+  // CDP clip.scale is a page scale factor, not DPR. Keep it at 1 to
+  // avoid double-scaling; Emulation deviceScaleFactor already controls
+  // device-pixel output resolution.
+  return { x, y, width: w, height: h, scale: 1 };
 }
 
 // Helper function to get watermark text from storage

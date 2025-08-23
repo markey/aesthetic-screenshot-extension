@@ -165,13 +165,9 @@
       let x = Math.min(startX, e.clientX);
       let y = Math.min(startY, e.clientY);
   
-      const dpr = window.devicePixelRatio;
-      const rect = {
-        x: x * dpr,
-        y: y * dpr,
-        width: width * dpr,
-        height: height * dpr
-      };
+      // Send rect in CSS pixels (viewport coords). We'll map to
+      // bitmap pixels in the background using the actual capture scale.
+      const rect = { x, y, width, height };
   
       const isDark = detectPageColorScheme();
   
