@@ -21,9 +21,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   
   chrome.runtime.onMessage.addListener((msg, sender, respond) => {
   if (msg.type === 'capture') {
-    captureAndProcess(msg.rect, sender.tab.id).then(finalUrl => {
-      chrome.tabs.sendMessage(sender.tab.id, { type: 'captured' });
-
+    captureAndProcess(msg.rect, sender.tab.id, msg.isDark).then(finalUrl => {
       // Always request the page to copy the image to the clipboard
       chrome.tabs.sendMessage(sender.tab.id, { type: 'copyToClipboard', dataUrl: finalUrl });
 
@@ -64,9 +62,9 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   }
 });
   
-  async function captureAndProcess(rectCss, tabId) {
+  async function captureAndProcess(rectCss, tabId, isDarkPage) {
     // Capture the full compositor output at device pixels, crop locally
-    const { dataUrl: fullDataUrl, vpCSS } = await captureCrisp(tabId);
+    const { dataUrl: fullDataUrl, vpCSS } = await captureCrisp(tabId, isDarkPage);
 
     const response = await fetch(fullDataUrl);
     const blob = await response.blob();
@@ -148,6 +146,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     const screenshotY = Math.round(docY + innerPadding);
     // Draw at 1:1 scale to avoid any resampling
     ctx.drawImage(screenshotImg, screenshotX, screenshotY, innerWidth, innerHeight);
+
   
     // Add watermark text (rendered in the gradient area below the document)
     const watermarkText = await getWatermarkText();
@@ -183,12 +182,11 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
       return finalUrl;
 }
 
-// Capture a crisp PNG of the visible tab or a CSS-rect region using CDP.
-// - Forces zoom to 1.0 during capture
-// - Uses actual devicePixelRatio as the capture scale
-// - Aligns clip to device pixels to avoid filtering
-async function captureCrisp(tabId) {
-  // Measure DPR and viewport at the user's current zoom to preserve layout
+// Capture a crisp PNG from the visible tab at device pixels.
+// If the page is dark, emulate prefers-color-scheme: light during capture
+// to avoid CSS filter inversion (which blurs text and distorts images).
+async function captureCrisp(tabId, isDarkPage) {
+  // Measure DPR and viewport at the user's current zoom to preserve mapping
   const [{ result: dpr = 1 }] = await chrome.scripting.executeScript({
     target: { tabId },
     func: () => window.devicePixelRatio
@@ -199,30 +197,133 @@ async function captureCrisp(tabId) {
   });
 
   const target = { tabId };
-  await chrome.debugger.attach(target, '1.3');
+  let attached = false;
+  let lightOverrideApplied = false;
 
   try {
-    // Avoid transparent background that can change AA behavior
-    await chrome.debugger.sendCommand(target, 'Emulation.setDefaultBackgroundColorOverride', {
-      color: { r: 255, g: 255, b: 255, a: 1 }
-    }).catch(() => {});
+    if (isDarkPage) {
+      // Attach debugger to emulate media features as light
+      await chrome.debugger.attach(target, '1.3');
+      attached = true;
+      await chrome.debugger.sendCommand(target, 'Emulation.setEmulatedMedia', {
+        features: [{ name: 'prefers-color-scheme', value: 'light' }]
+      }).catch(() => {});
+      await chrome.debugger.sendCommand(target, 'Emulation.setDefaultBackgroundColorOverride', {
+        color: { r: 255, g: 255, b: 255, a: 1 }
+      }).catch(() => {});
 
-    // Ensure Page domain is ready
-    await chrome.debugger.sendCommand(target, 'Page.enable').catch(() => {});
+      // Also apply a non-filter, CSS-based light override for sites that
+      // don't honor prefers-color-scheme. This keeps text crisp.
+      try {
+        const [{ result }] = await chrome.scripting.executeScript({
+          target: { tabId },
+          world: 'MAIN',
+          func: () => {
+            try {
+              const d = document.documentElement;
+              const b = document.body;
+              const prev = {
+                htmlClass: d.className,
+                bodyClass: b ? b.className : '',
+                attrs: Array.from(d.attributes).reduce((acc, a) => (acc[a.name] = a.value, acc), {})
+              };
+              // Store previous state for revert
+              window.__AESTHETIC_PREV__ = prev;
 
-    // Capture compositor output as-is (no zoom change, no metric override)
-    const { data } = await chrome.debugger.sendCommand(target, 'Page.captureScreenshot', {
-      format: 'png',
-      fromSurface: true,
-      // Capture only the visible viewport so bitmap size matches window.inner*.
-      captureBeyondViewport: false,
-      // No clip: capture full viewport, we will crop precisely client-side
+              // Heuristic: remove common dark markers
+              const darkClasses = ['dark','dark-mode','theme-dark','night','darkTheme','is-dark','mode-dark'];
+              darkClasses.forEach(c => d.classList.remove(c));
+              if (b) darkClasses.forEach(c => b.classList.remove(c));
+
+              // Hint attributes used by common frameworks
+              d.setAttribute('data-theme', 'light');
+              d.setAttribute('data-color-mode', 'light');
+              d.style.colorScheme = 'light';
+
+              // Install a lightweight CSS override without using filters
+              const style = document.getElementById('aesthetic-light-override') || document.createElement('style');
+              style.id = 'aesthetic-light-override';
+              style.textContent = `
+                :root { color-scheme: light !important; }
+                html, body { background: #ffffff !important; color: #111827 !important; }
+                html { filter: none !important; }
+                *, *::before, *::after { transition: none !important; }
+                img, video, canvas, svg, picture, iframe { filter: none !important; mix-blend-mode: normal !important; }
+                [data-theme], [data-color-mode], [class*="dark"], [class*="Dark"], [class*="night"] { color-scheme: light !important; }
+                :where(div, section, article, main, aside, header, footer, nav,
+                       p, span, li, ul, ol, a, h1, h2, h3, h4, h5, h6,
+                       table, tr, td, th, thead, tbody, tfoot,
+                       input, textarea, button, label, select,
+                       code, pre, blockquote, figure, figcaption) {
+                  color: #111827 !important;
+                  background-color: transparent !important;
+                }
+                a { color: #2563eb !important; }
+              `;
+              (document.head || document.documentElement).appendChild(style);
+
+              // Let layout/styles settle briefly
+              return new Promise(resolve => setTimeout(() => resolve(true), 120));
+            } catch (e) {
+              return false;
+            }
+          }
+        });
+        lightOverrideApplied = !!result;
+      } catch (_) {
+        // Best-effort; continue capture even if injection fails
+      }
+    }
+
+    // Capture the visible tab surface at device pixels (crisp text)
+    const dataUrl = await new Promise((resolve, reject) => {
+      chrome.tabs.captureVisibleTab(undefined, { format: 'png' }, (url) => {
+        const err = chrome.runtime.lastError;
+        if (err || !url) return reject(err || new Error('captureVisibleTab failed'));
+        resolve(url);
+      });
     });
 
-    return { dataUrl: 'data:image/png;base64,' + data, vpCSS: vp, dpr };
+    return { dataUrl, vpCSS: vp, dpr };
   } finally {
-    await chrome.debugger.sendCommand(target, 'Emulation.setDefaultBackgroundColorOverride').catch(() => {});
-    await chrome.debugger.detach(target).catch(() => {});
+    // Revert page overrides first so we don't leave traces
+    if (lightOverrideApplied) {
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          world: 'MAIN',
+          func: () => {
+            try {
+              const d = document.documentElement;
+              const b = document.body;
+              const prev = window.__AESTHETIC_PREV__;
+              const style = document.getElementById('aesthetic-light-override');
+              if (style) style.remove();
+              if (prev) {
+                d.className = prev.htmlClass;
+                if (b) b.className = prev.bodyClass;
+                // Restore attributes
+                const currentAttrs = new Set(Array.from(d.attributes).map(a => a.name));
+                for (const name of currentAttrs) {
+                  if (!(name in prev.attrs)) d.removeAttribute(name);
+                }
+                Object.entries(prev.attrs).forEach(([k, v]) => d.setAttribute(k, v));
+                delete window.__AESTHETIC_PREV__;
+              } else {
+                d.style.removeProperty('color-scheme');
+                d.removeAttribute('data-theme');
+                d.removeAttribute('data-color-mode');
+              }
+            } catch (_) {}
+          }
+        });
+      } catch (_) { /* ignore */ }
+    }
+    if (attached) {
+      // Best-effort cleanup
+      await chrome.debugger.sendCommand(target, 'Emulation.setDefaultBackgroundColorOverride').catch(() => {});
+      await chrome.debugger.detach(target).catch(() => {});
+    }
   }
 }
 

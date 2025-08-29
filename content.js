@@ -3,7 +3,7 @@
     let selectionDiv = null;
     let startX, startY;
     let isSelecting = false;
-    let invertStyle = null;
+    // No pre-capture CSS filters; post-process in background to keep text crisp
   
     const overlay = document.createElement('div');
     overlay.style.position = 'fixed';
@@ -170,25 +170,8 @@
       const rect = { x, y, width, height };
   
       const isDark = detectPageColorScheme();
-  
-      if (isDark) {
-        invertStyle = document.createElement('style');
-        invertStyle.textContent = `
-          html {
-            filter: invert(1) hue-rotate(180deg) !important;
-          }
-          img, video, [style*="background-image"], canvas, svg, iframe {
-            filter: invert(1) hue-rotate(180deg) !important;
-          }
-        `;
-        document.head.appendChild(invertStyle);
-        // Add delay to allow the browser to repaint after style application
-        setTimeout(() => {
-          chrome.runtime.sendMessage({ type: 'capture', rect });
-        }, 100);
-      } else {
-        chrome.runtime.sendMessage({ type: 'capture', rect });
-      }
+      // Send dark-mode hint so background can invert pixels after capture
+      chrome.runtime.sendMessage({ type: 'capture', rect, isDark });
   
       cancel();
     };
@@ -217,10 +200,6 @@
     });
   
   chrome.runtime.onMessage.addListener((msg) => {
-    if (msg.type === 'captured' && invertStyle) {
-      invertStyle.remove();
-      invertStyle = null;
-    }
     // Request from background to copy the produced image to clipboard
     if (msg.type === 'copyToClipboard' && msg.dataUrl) {
       copyImageDataUrlToClipboard(msg.dataUrl);
