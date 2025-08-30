@@ -64,7 +64,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   
   async function captureAndProcess(rectCss, tabId, isDarkPage) {
     // Slight super‑sampling to add weight without blur
-    const HIRES_SCALE = 1.5; // 1.0 = disabled, 1.5–2.0 recommended
+    const HIRES_SCALE = 2.0; // 1.0 = disabled, adaptively clamped
     // Capture the full compositor output at device pixels, crop locally
     const { dataUrl: fullDataUrl, vpCSS, dpr, effectiveScale } = await captureCrisp(tabId, isDarkPage, HIRES_SCALE);
 
@@ -202,6 +202,16 @@ async function captureCrisp(tabId, isDarkPage, superScale = 1) {
   let attached = false;
   let lightOverrideApplied = false;
   const needsHiRes = (superScale && superScale > 1);
+  // Compute an adaptive clamp so we don't exceed safe limits
+  const MAX_LONG_EDGE = 8192;            // guardrail for width/height
+  const MAX_PIXELS = 32 * 1024 * 1024;   // ~32 MP to avoid memory spikes
+  const baseW = Math.max(1, Math.floor(vp.w * (dpr || 1)));
+  const baseH = Math.max(1, Math.floor(vp.h * (dpr || 1)));
+  const maxByEdge = Math.min(MAX_LONG_EDGE / baseW, MAX_LONG_EDGE / baseH);
+  const maxByPixels = Math.sqrt(MAX_PIXELS / (baseW * baseH));
+  const adaptiveMax = Math.max(1, Math.min(maxByEdge, maxByPixels));
+  const requestedScale = Math.max(1, superScale);
+  const clampedScale = Math.min(requestedScale, adaptiveMax);
 
   try {
     if (isDarkPage || needsHiRes) {
@@ -220,7 +230,7 @@ async function captureCrisp(tabId, isDarkPage, superScale = 1) {
         await chrome.debugger.sendCommand(target, 'Emulation.setDeviceMetricsOverride', {
           width: Math.max(1, Math.floor(vp.w)),
           height: Math.max(1, Math.floor(vp.h)),
-          deviceScaleFactor: Math.max(1, (dpr || 1) * superScale),
+          deviceScaleFactor: Math.max(1, (dpr || 1) * clampedScale),
           mobile: false,
           scale: 1
         }).catch(() => {});
@@ -309,7 +319,7 @@ async function captureCrisp(tabId, isDarkPage, superScale = 1) {
       });
     }
 
-    return { dataUrl, vpCSS: vp, dpr, effectiveScale: needsHiRes ? superScale : 1 };
+    return { dataUrl, vpCSS: vp, dpr, effectiveScale: needsHiRes ? clampedScale : 1 };
   } finally {
     // Revert page overrides first so we don't leave traces
     if (lightOverrideApplied) {
