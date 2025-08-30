@@ -318,6 +318,10 @@ async function captureCrisp(tabId, isDarkPage, superScale = 1) {
                   background: #ffffff !important;
                   color: #111827 !important;
                   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
+                  font-weight: 500 !important; /* medium weight for crisper stems */
+                  -webkit-font-smoothing: antialiased !important;
+                  -moz-osx-font-smoothing: grayscale !important;
+                  text-rendering: optimizeLegibility !important;
                 }
                 html { filter: none !important; }
                 *, *::before, *::after { transition: none !important; }
@@ -330,6 +334,10 @@ async function captureCrisp(tabId, isDarkPage, superScale = 1) {
                        code, pre, blockquote, figure, figcaption) {
                   color: #111827 !important;
                   background-color: transparent !important;
+                }
+                /* Nudge common body text to medium, avoid overriding headings */
+                :where(p, span, li, a, td, th, small, label, input, textarea, button) {
+                  font-weight: 500 !important;
                 }
                 a { color: #2563eb !important; }
               `;
