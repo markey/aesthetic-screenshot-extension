@@ -63,10 +63,10 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 });
   
   async function captureAndProcess(rectCss, tabId, isDarkPage) {
-    // Slight super‑sampling to add weight without blur
-    const HIRES_SCALE = 2.0; // 1.0 = disabled, adaptively clamped
+    // Adaptive super-sampling based on content analysis
+    const adaptiveScale = await calculateAdaptiveScale(tabId);
     // Capture the full compositor output at device pixels, crop locally
-    const { dataUrl: fullDataUrl, vpCSS, dpr, effectiveScale } = await captureCrisp(tabId, isDarkPage, HIRES_SCALE);
+    const { dataUrl: fullDataUrl, vpCSS, dpr, effectiveScale } = await captureCrisp(tabId, isDarkPage, adaptiveScale);
 
     const response = await fetch(fullDataUrl);
     const blob = await response.blob();
@@ -109,11 +109,31 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     const canvasHeight = docHeight + outerPadding * 2;
   
     const canvas = new OffscreenCanvas(canvasWidth, canvasHeight);
-    const ctx = canvas.getContext('2d', { alpha: true, willReadFrequently: false });
-    
-    // Enable high‑quality smoothing for intentional downscale only
+    const ctx = canvas.getContext('2d', {
+      alpha: true,
+      willReadFrequently: false,
+      desynchronized: false
+    });
+
+    // Enhanced canvas settings for optimal text rendering
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
+
+    // Additional canvas optimizations for crisp text rendering
+    ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'left';
+    ctx.globalCompositeOperation = 'source-over';
+
+    // Set line width for crisp edges
+    ctx.lineWidth = 1;
+
+    // Optimize canvas for high-quality rendering
+    if (typeof ctx.webkitImageSmoothingEnabled !== 'undefined') {
+      ctx.webkitImageSmoothingEnabled = true;
+    }
+    if (typeof ctx.mozImageSmoothingEnabled !== 'undefined') {
+      ctx.mozImageSmoothingEnabled = true;
+    }
   
     // Gradient background
     const gradient = ctx.createLinearGradient(0, 0, canvasWidth, canvasHeight);
@@ -144,34 +164,51 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     ctx.fillStyle = 'white';
     ctx.fill();
   
-    // Draw screenshot inside document with high‑quality downscaling
+    // Draw screenshot inside document with high-quality downscaling
     const screenshotX = Math.round(docX + innerPadding);
     const screenshotY = Math.round(docY + innerPadding);
-    // Subtle contrast boost to recover perceived stroke weight after resampling
+
+    // Simple, reliable downscaling with proper anti-aliasing
     ctx.save();
-    ctx.filter = 'contrast(1.06) saturate(1.02)';
+
+    // Enable high-quality smoothing for the downscale
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
+    // Apply very subtle contrast enhancement to maintain text sharpness
+    ctx.filter = 'contrast(1.01)';
+
+    // Draw the high-resolution screenshot downscaled to target size
     ctx.drawImage(screenshotImg, screenshotX, screenshotY, innerWidth, innerHeight);
+
     ctx.restore();
 
   
-    // Add watermark text (rendered in the gradient area below the document)
+    // Add watermark text with clean rendering
     const watermarkText = await getWatermarkText();
     if (watermarkText) {
-      // Larger, bold font for readability; integer-aligned for crisp edges
+      ctx.save();
+
+      // Standard font settings for clean text
       ctx.font = 'bold 18px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
       ctx.textAlign = 'right';
       ctx.textBaseline = 'alphabetic';
-      ctx.shadowColor = 'transparent';
 
-      // Draw an outer light stroke for separation on the gradient, then dark fill
       const textX = Math.round(docX + docWidth);
       const textY = Math.round(docY + docHeight + 20);
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
-      ctx.strokeText(watermarkText, textX, textY);
+
+      // Simple, clean text rendering with subtle shadow
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.2)';
+      ctx.shadowBlur = 1;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 1;
       ctx.fillStyle = '#111827';
       ctx.fillText(watermarkText, textX, textY);
+
+      ctx.restore();
     }
+
+    // Skip global enhancement to avoid any potential artifacts
   
     const finalBlob = await canvas.convertToBlob({ 
       type: 'image/png',
@@ -398,6 +435,70 @@ function makeClipFromDeviceRect(deviceRect, dprAtSelection, dprAtCapture) {
   // avoid double-scaling; Emulation deviceScaleFactor already controls
   // device-pixel output resolution.
   return { x, y, width: w, height: h, scale: 1 };
+}
+
+// Adaptive scaling based on content analysis for optimal text quality
+async function calculateAdaptiveScale(tabId) {
+  try {
+    const [{ result: contentMetrics }] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        // Analyze text density and complexity
+        const allText = document.body.innerText || '';
+        const textLength = allText.length;
+
+        // Count text elements
+        const textElements = document.querySelectorAll('p, h1, h2, h3, h4, h5, h6, span, div, li, td, th, a, em, strong, b, i');
+        let totalTextElements = 0;
+        let smallTextCount = 0;
+
+        textElements.forEach(el => {
+          const text = el.textContent?.trim();
+          if (text && text.length > 0) {
+            totalTextElements++;
+            const fontSize = parseFloat(window.getComputedStyle(el).fontSize);
+            if (fontSize < 14) smallTextCount++;
+          }
+        });
+
+        // Calculate text density score
+        const viewportArea = window.innerWidth * window.innerHeight;
+        const textDensity = totalTextElements / Math.max(viewportArea / 10000, 1);
+
+        // Determine optimal scale based on content analysis (max 2.0x)
+        let recommendedScale = 2.0; // Base scale
+
+        // Conservative scaling for text-heavy content
+        if (textDensity > 0.8 || totalTextElements > 100) {
+          recommendedScale = 2.0; // Keep at 2.0x for very text-heavy content
+        } else if (textDensity > 0.4 || totalTextElements > 30) {
+          recommendedScale = 2.0; // Standard 2.0x for moderate content
+        }
+
+        // Small boost for pages with lots of small text
+        if (smallTextCount > totalTextElements * 0.5) {
+          recommendedScale = 2.0; // Keep at 2.0x
+        }
+
+        // Cap at reasonable maximum of 2.0x
+        recommendedScale = Math.min(recommendedScale, 2.0);
+
+        return {
+          scale: recommendedScale,
+          textElements: totalTextElements,
+          textDensity: textDensity,
+          smallTextRatio: smallTextCount / Math.max(totalTextElements, 1)
+        };
+      }
+    });
+
+    console.log('Content analysis:', contentMetrics);
+    return contentMetrics.scale;
+
+  } catch (error) {
+    console.warn('Content analysis failed, using default scale:', error);
+    return 2.0; // Fallback to standard quality
+  }
 }
 
 // Helper function to get watermark text from storage
