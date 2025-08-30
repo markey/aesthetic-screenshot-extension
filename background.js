@@ -63,8 +63,10 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 });
   
   async function captureAndProcess(rectCss, tabId, isDarkPage) {
+    // Slight super‑sampling to add weight without blur
+    const HIRES_SCALE = 1.5; // 1.0 = disabled, 1.5–2.0 recommended
     // Capture the full compositor output at device pixels, crop locally
-    const { dataUrl: fullDataUrl, vpCSS } = await captureCrisp(tabId, isDarkPage);
+    const { dataUrl: fullDataUrl, vpCSS, dpr, effectiveScale } = await captureCrisp(tabId, isDarkPage, HIRES_SCALE);
 
     const response = await fetch(fullDataUrl);
     const blob = await response.blob();
@@ -97,9 +99,10 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     const innerPadding = 40;
     const outerPadding = 45; // Adjusted to ~1.2cm at standard DPI
     const borderRadius = 8;
-    // Use the actual captured image dimensions (device pixels)
-    const innerWidth = screenshotImg.width;
-    const innerHeight = screenshotImg.height;
+    // Target draw size: downscale hi‑res capture to original CSS pixel size
+    const downscale = Math.max(1, effectiveScale || 1);
+    const innerWidth = Math.round(screenshotImg.width / downscale);
+    const innerHeight = Math.round(screenshotImg.height / downscale);
     const docWidth = innerWidth + innerPadding * 2;
     const docHeight = innerHeight + innerPadding * 2;
     const canvasWidth = docWidth + outerPadding * 2;
@@ -108,8 +111,8 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     const canvas = new OffscreenCanvas(canvasWidth, canvasHeight);
     const ctx = canvas.getContext('2d', { alpha: true, willReadFrequently: false });
     
-    // Disable smoothing for images; text will render crisply on integer coords
-    ctx.imageSmoothingEnabled = false;
+    // Enable high‑quality smoothing for intentional downscale only
+    ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
   
     // Gradient background
@@ -141,10 +144,9 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     ctx.fillStyle = 'white';
     ctx.fill();
   
-    // Draw screenshot inside document without scaling
+    // Draw screenshot inside document with high‑quality downscaling
     const screenshotX = Math.round(docX + innerPadding);
     const screenshotY = Math.round(docY + innerPadding);
-    // Draw at 1:1 scale to avoid any resampling
     ctx.drawImage(screenshotImg, screenshotX, screenshotY, innerWidth, innerHeight);
 
   
@@ -185,7 +187,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 // Capture a crisp PNG from the visible tab at device pixels.
 // If the page is dark, emulate prefers-color-scheme: light during capture
 // to avoid CSS filter inversion (which blurs text and distorts images).
-async function captureCrisp(tabId, isDarkPage) {
+async function captureCrisp(tabId, isDarkPage, superScale = 1) {
   // Measure DPR and viewport at the user's current zoom to preserve mapping
   const [{ result: dpr = 1 }] = await chrome.scripting.executeScript({
     target: { tabId },
@@ -199,9 +201,10 @@ async function captureCrisp(tabId, isDarkPage) {
   const target = { tabId };
   let attached = false;
   let lightOverrideApplied = false;
+  const needsHiRes = (superScale && superScale > 1);
 
   try {
-    if (isDarkPage) {
+    if (isDarkPage || needsHiRes) {
       // Attach debugger to emulate media features as light
       await chrome.debugger.attach(target, '1.3');
       attached = true;
@@ -211,6 +214,17 @@ async function captureCrisp(tabId, isDarkPage) {
       await chrome.debugger.sendCommand(target, 'Emulation.setDefaultBackgroundColorOverride', {
         color: { r: 255, g: 255, b: 255, a: 1 }
       }).catch(() => {});
+
+      // If hi‑res requested, increase deviceScaleFactor without changing layout
+      if (needsHiRes) {
+        await chrome.debugger.sendCommand(target, 'Emulation.setDeviceMetricsOverride', {
+          width: Math.max(1, Math.floor(vp.w)),
+          height: Math.max(1, Math.floor(vp.h)),
+          deviceScaleFactor: Math.max(1, (dpr || 1) * superScale),
+          mobile: false,
+          scale: 1
+        }).catch(() => {});
+      }
 
       // Also apply a non-filter, CSS-based light override for sites that
       // don't honor prefers-color-scheme. This keeps text crisp.
@@ -275,16 +289,27 @@ async function captureCrisp(tabId, isDarkPage) {
       }
     }
 
-    // Capture the visible tab surface at device pixels (crisp text)
-    const dataUrl = await new Promise((resolve, reject) => {
-      chrome.tabs.captureVisibleTab(undefined, { format: 'png' }, (url) => {
-        const err = chrome.runtime.lastError;
-        if (err || !url) return reject(err || new Error('captureVisibleTab failed'));
-        resolve(url);
+    let dataUrl;
+    if (attached) {
+      // Capture compositor output; respects overridden deviceScaleFactor
+      const { data } = await chrome.debugger.sendCommand(target, 'Page.captureScreenshot', {
+        format: 'png',
+        fromSurface: true,
+        captureBeyondViewport: false
       });
-    });
+      dataUrl = 'data:image/png;base64,' + data;
+    } else {
+      // Fallback path (no overrides needed)
+      dataUrl = await new Promise((resolve, reject) => {
+        chrome.tabs.captureVisibleTab(undefined, { format: 'png' }, (url) => {
+          const err = chrome.runtime.lastError;
+          if (err || !url) return reject(err || new Error('captureVisibleTab failed'));
+          resolve(url);
+        });
+      });
+    }
 
-    return { dataUrl, vpCSS: vp, dpr };
+    return { dataUrl, vpCSS: vp, dpr, effectiveScale: needsHiRes ? superScale : 1 };
   } finally {
     // Revert page overrides first so we don't leave traces
     if (lightOverrideApplied) {
@@ -320,6 +345,8 @@ async function captureCrisp(tabId, isDarkPage) {
       } catch (_) { /* ignore */ }
     }
     if (attached) {
+      // Clear metric overrides if set
+      await chrome.debugger.sendCommand(target, 'Emulation.clearDeviceMetricsOverride').catch(() => {});
       // Best-effort cleanup
       await chrome.debugger.sendCommand(target, 'Emulation.setDefaultBackgroundColorOverride').catch(() => {});
       await chrome.debugger.detach(target).catch(() => {});
