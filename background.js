@@ -96,13 +96,21 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
       screenshotImg = await createImageBitmap(cropBlob);
     }
   
-    const innerPadding = 40;
-    const outerPadding = 45; // Adjusted to ~1.2cm at standard DPI
-    const borderRadius = 8;
-    // Target draw size: downscale hi‑res capture to original CSS pixel size
-    const downscale = Math.max(1, effectiveScale || 1);
-    const innerWidth = Math.round(screenshotImg.width / downscale);
-    const innerHeight = Math.round(screenshotImg.height / downscale);
+    // Preserve native hi‑res: do NOT downscale the captured image.
+    // Instead, scale paddings/metrics up so ratios match the CSS design
+    // while retaining crisp device-pixel text edges (like html2canvas scale:2).
+    const scale = Math.max(1, effectiveScale || 1);
+    const baseInnerPadding = 40;   // CSS px baseline
+    const baseOuterPadding = 45;   // CSS px baseline
+    const baseBorderRadius = 8;    // CSS px baseline
+
+    const innerPadding = Math.round(baseInnerPadding * scale);
+    const outerPadding = Math.round(baseOuterPadding * scale);
+    const borderRadius = Math.round(baseBorderRadius * scale);
+
+    // Keep the inner area at 1:1 pixels with the captured bitmap
+    const innerWidth = screenshotImg.width;
+    const innerHeight = screenshotImg.height;
     const docWidth = innerWidth + innerPadding * 2;
     const docHeight = innerHeight + innerPadding * 2;
     const canvasWidth = docWidth + outerPadding * 2;
@@ -142,11 +150,11 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
   
-    // First shadow
+    // First shadow (scaled)
     ctx.shadowColor = 'rgba(0, 0, 0, 0.25)';
-    ctx.shadowBlur = 30;
+    ctx.shadowBlur = Math.round(30 * scale);
     ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 10;
+    ctx.shadowOffsetY = Math.round(10 * scale);
     const docX = Math.round(outerPadding);
     const docY = Math.round(outerPadding);
     ctx.beginPath();
@@ -154,32 +162,27 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     ctx.fillStyle = 'white';
     ctx.fill();
   
-    // Second shadow
+    // Second shadow (scaled)
     ctx.shadowColor = 'rgba(0, 0, 0, 0.15)';
-    ctx.shadowBlur = 12;
+    ctx.shadowBlur = Math.round(12 * scale);
     ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 4;
+    ctx.shadowOffsetY = Math.round(4 * scale);
     ctx.beginPath();
     ctx.roundRect(docX, docY, docWidth, docHeight, borderRadius);
     ctx.fillStyle = 'white';
     ctx.fill();
   
-    // Draw screenshot inside document with high-quality downscaling
+    // Draw screenshot inside the white document at 1:1 pixels
     const screenshotX = Math.round(docX + innerPadding);
     const screenshotY = Math.round(docY + innerPadding);
 
-    // Simple, reliable downscaling with proper anti-aliasing
+    // 1:1 draw — disable smoothing to avoid any blur on text
     ctx.save();
-
-    // Enable high-quality smoothing for the downscale
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-
-    // Apply very subtle contrast enhancement to maintain text sharpness
-    ctx.filter = 'contrast(1.01)';
-
-    // Draw the high-resolution screenshot downscaled to target size
-    ctx.drawImage(screenshotImg, screenshotX, screenshotY, innerWidth, innerHeight);
+    ctx.imageSmoothingEnabled = false;
+    if (typeof ctx.webkitImageSmoothingEnabled !== 'undefined') ctx.webkitImageSmoothingEnabled = false;
+    if (typeof ctx.mozImageSmoothingEnabled !== 'undefined') ctx.mozImageSmoothingEnabled = false;
+    ctx.filter = 'none';
+    ctx.drawImage(screenshotImg, screenshotX, screenshotY);
 
     ctx.restore();
 
@@ -189,19 +192,20 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     if (watermarkText) {
       ctx.save();
 
-      // Standard font settings for clean text
-      ctx.font = 'bold 18px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+      // Standard UI font stack with integer metrics, scaled with capture scale
+      const watermarkSize = Math.round(18 * scale);
+      ctx.font = `bold ${watermarkSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`;
       ctx.textAlign = 'right';
       ctx.textBaseline = 'alphabetic';
 
       const textX = Math.round(docX + docWidth);
-      const textY = Math.round(docY + docHeight + 20);
+      const textY = Math.round(docY + docHeight + Math.round(20 * scale));
 
       // Simple, clean text rendering with subtle shadow
       ctx.shadowColor = 'rgba(0, 0, 0, 0.2)';
-      ctx.shadowBlur = 1;
+      ctx.shadowBlur = Math.max(1, Math.round(1 * scale));
       ctx.shadowOffsetX = 0;
-      ctx.shadowOffsetY = 1;
+      ctx.shadowOffsetY = Math.max(1, Math.round(1 * scale));
       ctx.fillStyle = '#111827';
       ctx.fillText(watermarkText, textX, textY);
 
@@ -310,7 +314,11 @@ async function captureCrisp(tabId, isDarkPage, superScale = 1) {
               style.id = 'aesthetic-light-override';
               style.textContent = `
                 :root { color-scheme: light !important; }
-                html, body { background: #ffffff !important; color: #111827 !important; }
+                html, body {
+                  background: #ffffff !important;
+                  color: #111827 !important;
+                  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
+                }
                 html { filter: none !important; }
                 *, *::before, *::after { transition: none !important; }
                 img, video, canvas, svg, picture, iframe { filter: none !important; mix-blend-mode: normal !important; }
