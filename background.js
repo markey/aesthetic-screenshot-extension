@@ -147,7 +147,11 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     // Draw screenshot inside document with high‑quality downscaling
     const screenshotX = Math.round(docX + innerPadding);
     const screenshotY = Math.round(docY + innerPadding);
+    // Subtle contrast boost to recover perceived stroke weight after resampling
+    ctx.save();
+    ctx.filter = 'contrast(1.06) saturate(1.02)';
     ctx.drawImage(screenshotImg, screenshotX, screenshotY, innerWidth, innerHeight);
+    ctx.restore();
 
   
     // Add watermark text (rendered in the gradient area below the document)
